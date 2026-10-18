@@ -93,6 +93,16 @@ taskkill /F /PID $(netstat -ano | grep ':7456.*LISTENING' | awk '{print $NF}')
 `OD_DAEMON_URL` overrides the daemon URL. `OD_SKIP_DAEMON_AUTOSTART=1` disables
 the autostart in the bridge.
 
+## Daemon process hygiene
+
+Both scripts pin the daemon's working directory to the install root
+(`D:\OpenDesign`). This is not cosmetic: the daemon is detached and long-lived,
+so it keeps whatever cwd it inherited locked for its whole lifetime. Inheriting
+the caller's directory means, under DSH, the user's workspace — and a directory
+passed by a throwaway script became impossible to delete until the daemon was
+restarted. Verified both ways: before the fix a test directory could not be
+removed while the daemon ran; after it, the directory releases immediately.
+
 ## Traps found while building this
 
 - **`od` is not on PATH.** The Windows installer writes only the uninstall key,

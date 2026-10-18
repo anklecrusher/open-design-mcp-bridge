@@ -55,6 +55,12 @@ const child = spawn(EXE, [DAEMON_CLI, '--port', port, '--no-open'], {
     OD_PACKAGED_NAMESPACE: namespace,
     OD_PACKAGED_CONFIG_PATH: CONFIG_PATH,
   },
+  // Run from the install root, never the caller's directory. The daemon is
+  // detached and long-lived, so inheriting a cwd keeps that directory locked
+  // for as long as it runs — under DSH that would be the user's workspace, and
+  // a temp directory passed by a throwaway script becomes undeletable until the
+  // daemon exits. Observed exactly that while building this.
+  cwd: INSTALL_ROOT,
   detached: true,
   stdio: 'ignore',
   windowsHide: true,

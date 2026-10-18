@@ -97,6 +97,9 @@ const child = spawn(EXE, [DAEMON_CLI, 'mcp', '--daemon-url', daemonUrl], {
     OD_PACKAGED_NAMESPACE: namespace,
     OD_PACKAGED_CONFIG_PATH: CONFIG_PATH,
   },
+  // Same reason as start-daemon.mjs: an MCP server process is long-lived, and
+  // its cwd would otherwise be whatever directory DSH happened to spawn from.
+  cwd: INSTALL_ROOT,
   stdio: 'inherit',
   windowsHide: true,
 })
