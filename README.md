@@ -103,6 +103,66 @@ passed by a throwaway script became impossible to delete until the daemon was
 restarted. Verified both ways: before the fix a test directory could not be
 removed while the daemon ran; after it, the directory releases immediately.
 
+## Windows: the app does not start (ConstrainedLanguage)
+
+**Symptom.** Double-clicking `Open Design.exe` shows no window; the process
+exits about a second later and nothing stays in the background.
+
+**Cause.** `@open-design/platform` walks the process tree with a PowerShell
+script that constructs `[System.Collections.Generic.List[object]]::new()`. On
+this machine `powershell.exe -Command` runs in **ConstrainedLanguage**, where
+generic collection construction is rejected:
+
+```
+Cannot invoke method. Method invocation is supported only on core types in a
+constrained language mode.
+```
+
+That script is the first step of `retireExistingSidecar()`, which is the first
+step of `spawnSidecarChild()`. It throws, the packaged runtime reports
+`packaged runtime failed`, and the app exits. There is no fallback and nothing
+surfaces a dialog.
+
+**This is not caused by DSH.** Measured in three contexts — DSH's sandboxed
+shell, an explorer-forwarded normal user token, and Task Scheduler as the same
+user — `-Command` is ConstrainedLanguage in all of them, while `-File` is
+FullLanguage in all of them. `__PSLockdownPolicy` is unset, AppLocker is
+stopped, Smart App Control is not configured, and there is no PowerShell
+policy key. Whatever sets it is machine-level and out of scope here; the patch
+works around the consequence.
+
+**Fix.** `node patch-opendesign-clm.mjs` rewrites the four generic-collection
+constructions into plain arrays. Same algorithm, same JSON output, legal under
+ConstrainedLanguage. It is idempotent and refuses to half-patch if OpenDesign
+restructures the code.
+
+**Re-apply after every OpenDesign upgrade** — the installer overwrites the
+module.
+
+## The daemon port is ephemeral
+
+The desktop app starts its daemon on a **random port**, not 7456. Two launches
+gave 52974 and 52999; a third gave 58602. A hardcoded URL therefore only works
+for a daemon this bridge started itself.
+
+`mcp-bridge.mjs` resolves the URL in this order:
+
+1. `OD_DAEMON_URL`, when set.
+2. The port the running desktop app last used, read from its own log
+   (`net.fetch failed ... http://127.0.0.1:<port>/...` — the app emits one per
+   asset it cannot prefetch, so the current port is always the last match),
+   confirmed by requiring `/api/version` to answer with a `version` field.
+3. `http://127.0.0.1:7456` — the fixed port `start-daemon.mjs` uses.
+
+When discovery finds a live desktop daemon, autostart is skipped: starting a
+second one on 7456 would give two daemons the same data directory.
+
+**Bonus of connecting to the GUI daemon:** `/api/version` reports
+`capabilities.slideRenderer: true`, which a CLI-started daemon reports as
+`false`. PPTX export is gated on that flag, so routing through the desktop app
+is what makes `od export --format pptx` available.
+
+
 ## Traps found while building this
 
 - **`od` is not on PATH.** The Windows installer writes only the uninstall key,

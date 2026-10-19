@@ -42,7 +42,57 @@ try {
 const appData = process.env.APPDATA
 if (!appData) fail('APPDATA is not set; cannot locate the Open Design data root.')
 const dataDir = join(appData, 'Open Design', 'namespaces', namespace, 'data')
-const daemonUrl = process.env.OD_DAEMON_URL ?? 'http://127.0.0.1:7456'
+
+// The desktop app starts its daemon on an EPHEMERAL port (verified: 52974 and
+// 52999 across two launches), so a hardcoded 7456 only works for a daemon this
+// bridge started itself. When the GUI is running we must find its port.
+//
+// Discovery order:
+//   1. OD_DAEMON_URL, when set explicitly — always wins.
+//   2. The port the running desktop app last talked to, read from its own log
+//      (`net.fetch failed ... http://127.0.0.1:<port>/...`). The app logs one of
+//      these per asset it fails to prefetch, so the port is always present.
+//   3. 7456, the fixed port start-daemon.mjs uses.
+const OD_PORT_RE = /http:\/\/127\.0\.0\.1:(\d{2,5})\//g
+
+function portFromDesktopLog() {
+  const logPath = join(appData, 'Open Design', 'namespaces', namespace, 'logs', 'desktop', 'latest.log')
+  let text
+  try { text = readFileSync(logPath, 'utf8') } catch { return null }
+  // Scan backwards: the newest launch's port is the last one mentioned.
+  const ports = [...text.matchAll(OD_PORT_RE)].map((m) => Number(m[1]))
+  for (let i = ports.length - 1; i >= 0; i -= 1) {
+    const port = ports[i]
+    // The desktop's own UI port also appears here; the daemon answers /api/version.
+    if (Number.isFinite(port) && port > 0) return port
+  }
+  return null
+}
+
+async function respondsAsDaemon(port) {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 1200)
+    const res = await fetch(`http://127.0.0.1:${port}/api/version`, { signal: controller.signal })
+    clearTimeout(timer)
+    if (!res.ok) return false
+    const body = await res.json()
+    return body?.version?.version != null
+  } catch { return false }
+}
+
+async function discoverDaemonUrl() {
+  const explicit = process.env.OD_DAEMON_URL
+  if (explicit) return explicit
+
+  const fromLog = portFromDesktopLog()
+  if (fromLog != null && await respondsAsDaemon(fromLog)) {
+    return `http://127.0.0.1:${fromLog}`
+  }
+  return 'http://127.0.0.1:7456'
+}
+
+const daemonUrl = await discoverDaemonUrl()
 
 // The daemon is a separate long-lived process. If it is not up, start it here
 // so a DSH restart does not leave every tool call failing with ECONNREFUSED.
@@ -85,6 +135,9 @@ async function ensureDaemon(url, port) {
 
 let daemonPort = 7456
 try { daemonPort = Number(new URL(daemonUrl).port) || 7456 } catch {}
+// Autostart only makes sense for the fixed port. When discovery found a live
+// desktop daemon there is nothing to start, and spawning a second one on 7456
+// would leave two daemons fighting over the same data directory.
 await ensureDaemon(daemonUrl, daemonPort)
 
 const child = spawn(EXE, [DAEMON_CLI, 'mcp', '--daemon-url', daemonUrl], {
