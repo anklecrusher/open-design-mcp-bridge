@@ -103,6 +103,42 @@ passed by a throwaway script became impossible to delete until the daemon was
 restarted. Verified both ways: before the fix a test directory could not be
 removed while the daemon ran; after it, the directory releases immediately.
 
+## OpenDesign auto-updates into a DIFFERENT directory
+
+This is the trap that made the crash look unfixable. OpenDesign 0.26+ installs
+through a launcher and auto-updates into a per-version payload:
+
+```
+%APPDATA%\Open Design\launcher\channels\stable\namespaces\<ns>\versions\<v>\payload
+```
+
+Double-clicking `D:\OpenDesign\Open Design.exe` does **not** necessarily run
+that copy — the launcher hands off to the newest staged payload. So after an
+auto-update:
+
+- the shortcut still points at the old install,
+- the old install still has the CLM patch,
+- `grep` on it reports "already patched",
+- and the app keeps crashing, because the running copy is the new payload.
+
+`patch-opendesign-clm.mjs` therefore scans **every** payload (launcher versions
+plus the install root) rather than taking one path. It prints one line per
+payload so a partially-patched machine is visible instead of looking fine.
+
+**Run it after every OpenDesign update.** If the app starts crashing again
+right after an update, this is the first thing to check:
+
+```bash
+node patch-opendesign-clm.mjs --dry-run   # which payloads need it
+node patch-opendesign-clm.mjs             # patch them
+```
+
+Observed timeline on this machine: patched 0.25.0 on 10-19, OpenDesign
+auto-updated to 0.26.0 on 10-22, app crashed 21 times in one session, patch
+report on the old install said "already patched". Patching the 0.26.0 payload
+fixed it.
+
+
 ## Windows: the app does not start (ConstrainedLanguage)
 
 **Symptom.** Double-clicking `Open Design.exe` shows no window; the process
